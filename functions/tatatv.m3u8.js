@@ -136,7 +136,7 @@ export async function onRequest(context) {
   const { request } = context;
   const urlObj = new URL(request.url);
   try {
-    const baseUrl = `${urlObj.origin}/api/fusion4k`;
+    const baseUrl = `${urlObj.origin}/tatatv.m3u8`;
     const id = urlObj.searchParams.get("id");
 
     // Direct stream
