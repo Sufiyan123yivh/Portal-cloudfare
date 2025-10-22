@@ -12,10 +12,6 @@ const config = {
 };
 
 const host = new URL(config.url).host;
-const TOKEN_CACHE_TTL = 10 * 60 * 1000; // 10 min
-let tokenCache = { token: null, expires: 0 };
-let channelsCache = { data: null, expires: 0 };
-let genresCache = { data: null, expires: 0 };
 
 function buildHeaders(token) {
   return {
@@ -50,44 +46,24 @@ async function getProfile(token) {
   await fetchInfo(url, buildHeaders(token));
 }
 
-async function generateToken() {
+async function getToken() {
   const token = await handshake();
   await getProfile(token);
-  tokenCache = { token, expires: Date.now() + TOKEN_CACHE_TTL };
   return token;
 }
 
-async function getToken(force = false) {
-  if (!force && tokenCache.token && Date.now() < tokenCache.expires) return tokenCache.token;
-  return await generateToken();
-}
-
-async function safeFetch(fn) {
-  try {
-    const token = await getToken();
-    return await fn(token);
-  } catch (err) {
-    const token = await getToken(true);
-    return await fn(token);
-  }
-}
-
 async function getAllChannels(token) {
-  if (channelsCache.data && Date.now() < channelsCache.expires) return channelsCache.data;
   const url = `https://${host}/stalker_portal/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml`;
   const res = await fetchInfo(url, buildHeaders(token));
   if (!res.data?.js?.data) throw new Error("Invalid channel data");
-  channelsCache = { data: res.data.js.data, expires: Date.now() + TOKEN_CACHE_TTL };
   return res.data.js.data;
 }
 
 async function getGenres(token) {
-  if (genresCache.data && Date.now() < genresCache.expires) return genresCache.data;
   const url = `https://${host}/stalker_portal/server/load.php?type=itv&action=get_genres&JsHttpRequest=1-xml`;
   const res = await fetchInfo(url, buildHeaders(token));
   const map = {};
   for (const g of res.data?.js || []) if (g.id !== "*") map[g.id] = g.title;
-  genresCache = { data: map, expires: Date.now() + TOKEN_CACHE_TTL };
   return map;
 }
 
@@ -112,22 +88,18 @@ export async function onRequest(context) {
   try {
     const baseUrl = `${urlObj.origin}/fusion4k.js`;
 
-    // Direct stream - instant
+    // Direct stream
     if (id) {
-      return await safeFetch(async (token) => {
-        const cmd = `/ch/${id}`; // generate cmd directly
-        const streamUrl = await getStreamUrl(token, cmd);
-        if (!streamUrl) return new Response("Failed to fetch stream link", { status: 500 });
-        return Response.redirect(streamUrl, 302);
-      });
+      const token = await getToken();
+      const cmd = `/ch/${id}`;
+      const streamUrl = await getStreamUrl(token, cmd);
+      if (!streamUrl) return new Response("Failed to fetch stream link", { status: 500 });
+      return Response.redirect(streamUrl, 302);
     }
 
     // Full playlist
-    const [channels, genres] = await safeFetch(async (token) => {
-      const ch = await getAllChannels(token);
-      const gr = await getGenres(token);
-      return [ch, gr];
-    });
+    const token = await getToken();
+    const [channels, genres] = await Promise.all([getAllChannels(token), getGenres(token)]);
 
     let playlist = `#EXTM3U\n#DATE:- ${new Date().toLocaleString("en-IN")}\n\n`;
     for (const ch of channels) {
