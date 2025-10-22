@@ -1,5 +1,5 @@
 // /functions/fusion4k.js
-// Compatible with Cloudflare Pages Functions
+// Cloudflare Pages version with detailed error logging
 
 const config = {
   url: "https://tatatv.cc/stalker_portal/c/",
@@ -14,11 +14,8 @@ const config = {
 };
 
 const host = new URL(config.url).host;
-
-// Simple KV-like cache (runtime only)
 const tokenCache = new Map();
 
-// Helper to fetch JSON safely
 async function fetchInfo(url, headers) {
   const res = await fetch(url, {
     method: "GET",
@@ -35,96 +32,83 @@ async function fetchInfo(url, headers) {
   }
 }
 
-// Handshake
 async function handshake() {
-  const url = `http://${host}/stalker_portal/server/load.php?type=stb&action=handshake&token=&JsHttpRequest=1-xml`;
+  const url = `https://${host}/stalker_portal/server/load.php?type=stb&action=handshake&token=&JsHttpRequest=1-xml`;
   const headers = {
     "User-Agent":
       "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver:2 rev:250 Safari/533.3",
     "X-User-Agent": "Model: MAG250; Link: WiFi",
-    Referer: `http://${host}/stalker_portal/c/`,
-    Host: host,
+    Referer: `https://${host}/stalker_portal/c/`,
   };
   const res = await fetchInfo(url, headers);
-  return {
-    token: res.data?.js?.token || "",
-    random: res.data?.js?.random || "",
-  };
+  console.log("Handshake:", res.raw);
+  return res.data?.js?.token || "";
 }
 
-// Re-handshake
 async function reGenerateToken(token) {
-  const url = `http://${host}/stalker_portal/server/load.php?type=stb&action=handshake&token=${token}&JsHttpRequest=1-xml`;
+  const url = `https://${host}/stalker_portal/server/load.php?type=stb&action=handshake&token=${token}&JsHttpRequest=1-xml`;
   const headers = {
     "User-Agent":
       "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver:2 rev:250 Safari/533.3",
     "X-User-Agent": "Model: MAG250; Link: WiFi",
-    Referer: `http://${host}/stalker_portal/c/`,
-    Host: host,
+    Referer: `https://${host}/stalker_portal/c/`,
   };
   const res = await fetchInfo(url, headers);
+  console.log("ReHandshake:", res.raw);
   return res.data?.js?.token || token;
 }
 
-// Get profile
 async function getProfile(token) {
   const timestamp = Math.floor(Date.now() / 1000);
-  const url = `http://${host}/stalker_portal/server/load.php?type=stb&action=get_profile&sn=${config.sn}&device_id=${config.device_id_1}&device_id2=${config.device_id_2}&signature=${config.sig}&timestamp=${timestamp}&api_signature=${config.api}&JsHttpRequest=1-xml`;
-  const headers = buildHeaders(token);
-  await fetchInfo(url, headers);
+  const url = `https://${host}/stalker_portal/server/load.php?type=stb&action=get_profile&sn=${config.sn}&device_id=${config.device_id_1}&device_id2=${config.device_id_2}&signature=${config.sig}&timestamp=${timestamp}&api_signature=${config.api}&JsHttpRequest=1-xml`;
+  const res = await fetchInfo(url, buildHeaders(token));
+  console.log("Profile:", res.raw);
 }
 
-// Generate new token
 async function generateToken() {
-  const { token } = await handshake();
+  const token = await handshake();
   const validToken = await reGenerateToken(token);
   await getProfile(validToken);
   tokenCache.set(host, validToken);
   return validToken;
 }
 
-// Get token (auto-refresh)
-async function getToken(forceRefresh = false) {
+async function getToken(force = false) {
   const cached = tokenCache.get(host);
-  if (!forceRefresh && cached) return cached;
+  if (!force && cached) return cached;
   return await generateToken();
 }
 
-// Headers builder
 function buildHeaders(token) {
   return {
     "User-Agent":
       "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver:2 rev:250 Safari/533.3",
     "X-User-Agent": "Model: MAG250; Link: WiFi",
-    Referer: `http://${host}/stalker_portal/c/`,
+    Referer: `https://${host}/stalker_portal/c/`,
     Authorization: `Bearer ${token}`,
-    Host: host,
   };
 }
 
-// Safe fetch wrapper
-async function safeFetch(fetchFn) {
+async function safeFetch(fn) {
   try {
     const token = await getToken();
-    return await fetchFn(token);
+    return await fn(token);
   } catch (err) {
-    console.log("Token expired or failed, regenerating...");
+    console.log("Retrying with new token:", err);
     const token = await getToken(true);
-    return await fetchFn(token);
+    return await fn(token);
   }
 }
 
-// Get all channels
 async function getAllChannels(token) {
-  const url = `http://${host}/stalker_portal/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml`;
+  const url = `https://${host}/stalker_portal/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml`;
   const res = await fetchInfo(url, buildHeaders(token));
-  if (!res.data?.js?.data) throw new Error("Invalid channel data");
+  if (!res.data?.js?.data) throw new Error(res.raw || "Invalid channel data");
   return res.data.js.data;
 }
 
-// Get genres
 async function getGenres(token) {
-  const url = `http://${host}/stalker_portal/server/load.php?type=itv&action=get_genres&JsHttpRequest=1-xml`;
+  const url = `https://${host}/stalker_portal/server/load.php?type=itv&action=get_genres&JsHttpRequest=1-xml`;
   const res = await fetchInfo(url, buildHeaders(token));
   const arr = res.data?.js || [];
   const map = {};
@@ -134,46 +118,50 @@ async function getGenres(token) {
   return map;
 }
 
-// Get stream URL (cmd)
 async function getStreamUrl(token, cmd) {
-  if (!cmd) return null;
-  const encodedCmd = encodeURIComponent(cmd);
-  const url = `http://${host}/stalker_portal/server/load.php?type=itv&action=create_link&cmd=${encodedCmd}&JsHttpRequest=1-xml`;
+  const encoded = encodeURIComponent(cmd);
+  const url = `https://${host}/stalker_portal/server/load.php?type=itv&action=create_link&cmd=${encoded}&JsHttpRequest=1-xml`;
   const res = await fetchInfo(url, buildHeaders(token));
+  console.log("CreateLink:", res.raw);
   return res.data?.js?.cmd || null;
 }
 
-// Logo fix
 function getLogo(logo) {
-  if (!logo || (!logo.endsWith(".png") && !logo.endsWith(".jpg"))) {
+  if (!logo || (!logo.endsWith(".png") && !logo.endsWith(".jpg")))
     return "https://i.ibb.co/gLsp7Vrz/x.jpg";
-  }
-  return `http://${host}/stalker_portal/misc/logos/320/${logo}`;
+  return `https://${host}/stalker_portal/misc/logos/320/${logo}`;
 }
 
-// Cloudflare Pages API handler
 export async function onRequest(context) {
   const { request } = context;
   const urlObj = new URL(request.url);
-
   try {
     const baseUrl = `${urlObj.origin}/api/fusion4k`;
+    const id = urlObj.searchParams.get("id");
 
-    // If ?id=... present → redirect to stream
-    const channelId = urlObj.searchParams.get("id");
-    if (channelId) {
-      const streamUrl = await safeFetch(async (token) => {
+    // Direct stream
+    if (id) {
+      return await safeFetch(async (token) => {
         const channels = await getAllChannels(token);
-        const ch = channels.find((c) => c.cmd && c.cmd.includes(`/ch/${channelId}`));
-        if (!ch) return null;
-        return await getStreamUrl(token, ch.cmd);
+        const ch = channels.find((c) => c.cmd?.includes(`/ch/${id}`));
+        if (!ch)
+          return new Response(
+            JSON.stringify({ error: "Channel not found", id }),
+            { status: 404, headers: { "Content-Type": "application/json" } }
+          );
+
+        const streamUrl = await getStreamUrl(token, ch.cmd);
+        if (!streamUrl)
+          return new Response(
+            JSON.stringify({ error: "Failed to create link", channel: ch }),
+            { status: 500, headers: { "Content-Type": "application/json" } }
+          );
+
+        return Response.redirect(streamUrl, 302);
       });
-      if (!streamUrl)
-        return new Response("Failed to fetch stream link", { status: 500 });
-      return Response.redirect(streamUrl, 302);
     }
 
-    // Otherwise → return full M3U playlist
+    // Playlist
     const [channels, genres] = await safeFetch(async (token) => {
       const ch = await getAllChannels(token);
       const gr = await getGenres(token);
@@ -196,7 +184,10 @@ export async function onRequest(context) {
       },
     });
   } catch (err) {
-    console.error(err);
-    return new Response("Server error", { status: 500 });
+    console.error("Server error:", err);
+    return new Response(JSON.stringify({ error: String(err) }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
