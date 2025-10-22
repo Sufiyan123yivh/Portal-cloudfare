@@ -1,142 +1,149 @@
-// /functions/tatatv.mjs
-export const onRequest = async (context) => {
+// /functions/fusion4k.js
+// ⚡ Optimized for fast channel fetching (with token cache + get_profile)
+
+const config = {
+  url: "https://tatatv.cc/stalker_portal/c/",
+  mac: "00:1A:79:00:13:DA",
+  sn: "8DC34D20E1021",
+  device_id_1:
+    "04AAC14D19D6184933091188770C419C0FB2D744BF402A8F56C6654A3A9CAA43",
+  device_id_2:
+    "04AAC14D19D6184933091188770C419C0FB2D744BF402A8F56C6654A3A9CAA43",
+  sig: "",
+  api: "263",
+};
+
+const host = new URL(config.url).host;
+const tokenCache = new Map();
+const TOKEN_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+function buildHeaders(token) {
+  return {
+    "User-Agent":
+      "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver:2 rev:250 Safari/533.3",
+    "X-User-Agent": "Model: MAG250; Link: WiFi",
+    Referer: `https://${host}/stalker_portal/c/`,
+    Authorization: `Bearer ${token}`,
+    Cookie: `mac=${config.mac}; stb_lang=en; timezone=GMT`,
+  };
+}
+
+async function fetchInfo(url, headers) {
+  const res = await fetch(url, { headers });
+  const text = await res.text();
+  try {
+    return { data: JSON.parse(text.replace(/^.*?{/, "{")), raw: text };
+  } catch {
+    return { data: {}, raw: text };
+  }
+}
+
+async function handshake() {
+  const url = `https://${host}/stalker_portal/server/load.php?type=stb&action=handshake&mac=${config.mac}&JsHttpRequest=1-xml`;
+  const headers = buildHeaders("");
+  const res = await fetchInfo(url, headers);
+  console.log("Handshake:", res.raw);
+  return res.data?.js?.token || "";
+}
+
+async function getProfile(token) {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const url = `https://${host}/stalker_portal/server/load.php?type=stb&action=get_profile&sn=${config.sn}&device_id=${config.device_id_1}&device_id2=${config.device_id_2}&signature=${config.sig}&timestamp=${timestamp}&api_signature=${config.api}&JsHttpRequest=1-xml`;
+  const res = await fetchInfo(url, buildHeaders(token));
+  console.log("Profile:", res.raw);
+}
+
+async function generateToken() {
+  const token = await handshake();
+  await getProfile(token);
+  tokenCache.set(host, { token, expires: Date.now() + TOKEN_CACHE_TTL });
+  return token;
+}
+
+async function getToken(force = false) {
+  const cached = tokenCache.get(host);
+  if (!force && cached && Date.now() < cached.expires) return cached.token;
+  return await generateToken();
+}
+
+async function safeFetch(fn) {
+  try {
+    const token = await getToken();
+    return await fn(token);
+  } catch (err) {
+    console.log("⚠️ Retrying with new token:", err);
+    const token = await getToken(true);
+    return await fn(token);
+  }
+}
+
+async function getAllChannels(token) {
+  const url = `https://${host}/stalker_portal/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml`;
+  const res = await fetchInfo(url, buildHeaders(token));
+  if (!res.data?.js?.data) throw new Error("Invalid channel data");
+  return res.data.js.data;
+}
+
+async function getGenres(token) {
+  const url = `https://${host}/stalker_portal/server/load.php?type=itv&action=get_genres&JsHttpRequest=1-xml`;
+  const res = await fetchInfo(url, buildHeaders(token));
+  const arr = res.data?.js || [];
+  const map = {};
+  for (const g of arr) if (g.id !== "*") map[g.id] = g.title;
+  return map;
+}
+
+async function getStreamUrl(token, cmd) {
+  const encoded = encodeURIComponent(cmd);
+  const url = `https://${host}/stalker_portal/server/load.php?type=itv&action=create_link&cmd=${encoded}&JsHttpRequest=1-xml`;
+  const res = await fetchInfo(url, buildHeaders(token));
+  console.log("CreateLink:", res.raw);
+  return res.data?.js?.cmd || null;
+}
+
+function getLogo(logo) {
+  if (!logo || (!logo.endsWith(".png") && !logo.endsWith(".jpg")))
+    return "https://i.ibb.co/gLsp7Vrz/x.jpg";
+  return `https://${host}/stalker_portal/misc/logos/320/${logo}`;
+}
+
+// 🚀 Main entry
+export async function onRequest(context) {
   const { request } = context;
   const urlObj = new URL(request.url);
   const id = urlObj.searchParams.get("id");
+  const baseUrl = `${urlObj.origin}/fusion4k.js`;
 
-  // ⚙️ Configuration
-  const config = {
-    baseUrl: "https://tatatv.cc/stalker_portal",
-    mac: "00:1A:79:00:13:DA",
-  };
+  try {
+    // 🔹 Direct stream mode
+    if (id) {
+      return await safeFetch(async (token) => {
+        const channels = await getAllChannels(token);
+        const ch = channels.find((c) => c.cmd?.includes(`/ch/${id}`));
+        if (!ch)
+          return new Response("Channel not found", { status: 404 });
 
-  // 🧠 In-memory token cache (no KV)
-  let globalThisCache = globalThis.__tatatvCache || {
-    token: null,
-    expires: 0,
-  };
-  globalThis.__tatatvCache = globalThisCache;
+        const streamUrl = await getStreamUrl(token, ch.cmd);
+        if (!streamUrl)
+          return new Response("Failed to fetch stream link", { status: 500 });
 
-  // Fetch helper
-  async function fetchInfo(url, headers) {
-    const res = await fetch(url, { headers });
-    const text = await res.text();
-    try {
-      return JSON.parse(text.replace(/^.*?{/, "{"));
-    } catch {
-      return {};
-    }
-  }
-
-  // Get or refresh token
-  async function getValidToken(forceRefresh = false) {
-    const now = Date.now();
-
-    // ✅ Use cached token if still valid
-    if (!forceRefresh && globalThisCache.token && now < globalThisCache.expires) {
-      return globalThisCache.token;
+        return Response.redirect(streamUrl, 302);
+      });
     }
 
-    console.log("🔄 Generating new token...");
-    const handshakeUrl = `${config.baseUrl}/server/load.php?type=stb&action=handshake&mac=${config.mac}&JsHttpRequest=1-xml`;
-    const headers = {
-      "User-Agent":
-        "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3",
-      "X-User-Agent": "Model: MAG250; Link: WiFi",
-      Referer: `${config.baseUrl}/c/`,
-    };
-
-    const data = await fetchInfo(handshakeUrl, headers);
-    const token = data?.js?.token || "";
-    globalThisCache.token = token;
-    globalThisCache.expires = now + 4 * 3600 * 1000; // valid for 4 hours
-    return token;
-  }
-
-  // Auto-refresh wrapper
-  async function withToken(callback) {
-    try {
-      const token = await getValidToken();
-      return await callback(token);
-    } catch (err) {
-      console.log("⚠️ Token failed, retrying...");
-      const token = await getValidToken(true);
-      return await callback(token);
-    }
-  }
-
-  // Build headers
-  function buildHeaders(token) {
-    return {
-      "User-Agent":
-        "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3",
-      "X-User-Agent": "Model: MAG250; Link: WiFi",
-      Referer: `${config.baseUrl}/c/`,
-      Authorization: `Bearer ${token}`,
-    };
-  }
-
-  // Get all channels
-  async function getAllChannels(token) {
-    const url = `${config.baseUrl}/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml`;
-    const data = await fetchInfo(url, buildHeaders(token));
-    return data?.js?.data || [];
-  }
-
-  // Get genres
-  async function getGenres(token) {
-    const url = `${config.baseUrl}/server/load.php?type=itv&action=get_genres&JsHttpRequest=1-xml`;
-    const data = await fetchInfo(url, buildHeaders(token));
-    const genres = {};
-    for (const g of data?.js || []) {
-      if (g.id !== "*") genres[g.id] = g.title;
-    }
-    return genres;
-  }
-
-  // Get stream URL
-  async function getStreamUrl(token, cmd) {
-    const encodedCmd = encodeURIComponent(cmd);
-    const url = `${config.baseUrl}/server/load.php?type=itv&action=create_link&cmd=${encodedCmd}&JsHttpRequest=1-xml`;
-    const data = await fetchInfo(url, buildHeaders(token));
-    return data?.js?.cmd || null;
-  }
-
-  // Fallback logo
-  function getLogo(logo) {
-    if (!logo) return "https://i.ibb.co/gLsp7Vrz/x.jpg";
-    return `${config.baseUrl}/misc/logos/320/${logo}`;
-  }
-
-  // 🎬 If ?id= present → stream link redirect
-  if (id) {
-    return await withToken(async (token) => {
-      const channels = await getAllChannels(token);
-      const ch = channels.find((c) => c.cmd?.includes(`/ch/${id}`));
-      if (!ch) return new Response("Channel not found", { status: 404 });
-
-      const streamUrl = await getStreamUrl(token, ch.cmd);
-      if (!streamUrl)
-        return new Response("Failed to fetch stream link", { status: 500 });
-
-      return Response.redirect(streamUrl, 302);
+    // 🔹 Full M3U playlist
+    const [channels, genres] = await safeFetch(async (token) => {
+      const ch = await getAllChannels(token);
+      const gr = await getGenres(token);
+      return [ch, gr];
     });
-  }
-
-  // 📺 If no ?id= → return full playlist
-  return await withToken(async (token) => {
-    const [channels, genres] = await Promise.all([
-      getAllChannels(token),
-      getGenres(token),
-    ]);
 
     let playlist = `#EXTM3U\n#DATE:- ${new Date().toLocaleString("en-IN")}\n\n`;
-
     for (const ch of channels) {
       const group = genres[ch.tv_genre_id] || "Others";
       const logo = getLogo(ch.logo);
       const id = ch.cmd.replace("ffrt http://localhost/ch/", "");
-      const playUrl = `${urlObj.origin}/tatatv.m3u8?id=${encodeURIComponent(id)}`;
+      const playUrl = `${urlObj.origin}/fusion4k.js?id=${encodeURIComponent(id)}`;
       playlist += `#EXTINF:-1 tvg-id="${id}" tvg-logo="${logo}" group-title="${group}",${ch.name}\n${playUrl}\n\n`;
     }
 
@@ -146,5 +153,11 @@ export const onRequest = async (context) => {
         "Content-Disposition": 'inline; filename="tatatv.m3u8"',
       },
     });
-  });
-};
+  } catch (err) {
+    console.error("❌ Server error:", err);
+    return new Response(
+      JSON.stringify({ error: String(err.message || err) }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
+}
