@@ -1,6 +1,4 @@
 // /functions/fusion4k.js
-// ⚡ Optimized for fast channel fetching (with token cache + get_profile)
-
 const config = {
   url: "https://tatatv.cc/stalker_portal/c/",
   mac: "00:1A:79:00:13:DA",
@@ -14,8 +12,10 @@ const config = {
 };
 
 const host = new URL(config.url).host;
-const tokenCache = new Map();
-const TOKEN_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const TOKEN_CACHE_TTL = 10 * 60 * 1000; // 10 min
+let tokenCache = { token: null, expires: 0 };
+let channelsCache = { data: null, expires: 0 };
+let genresCache = { data: null, expires: 0 };
 
 function buildHeaders(token) {
   return {
@@ -40,29 +40,25 @@ async function fetchInfo(url, headers) {
 
 async function handshake() {
   const url = `https://${host}/stalker_portal/server/load.php?type=stb&action=handshake&mac=${config.mac}&JsHttpRequest=1-xml`;
-  const headers = buildHeaders("");
-  const res = await fetchInfo(url, headers);
-  console.log("Handshake:", res.raw);
+  const res = await fetchInfo(url, buildHeaders(""));
   return res.data?.js?.token || "";
 }
 
 async function getProfile(token) {
   const timestamp = Math.floor(Date.now() / 1000);
   const url = `https://${host}/stalker_portal/server/load.php?type=stb&action=get_profile&sn=${config.sn}&device_id=${config.device_id_1}&device_id2=${config.device_id_2}&signature=${config.sig}&timestamp=${timestamp}&api_signature=${config.api}&JsHttpRequest=1-xml`;
-  const res = await fetchInfo(url, buildHeaders(token));
-  console.log("Profile:", res.raw);
+  await fetchInfo(url, buildHeaders(token));
 }
 
 async function generateToken() {
   const token = await handshake();
   await getProfile(token);
-  tokenCache.set(host, { token, expires: Date.now() + TOKEN_CACHE_TTL });
+  tokenCache = { token, expires: Date.now() + TOKEN_CACHE_TTL };
   return token;
 }
 
 async function getToken(force = false) {
-  const cached = tokenCache.get(host);
-  if (!force && cached && Date.now() < cached.expires) return cached.token;
+  if (!force && tokenCache.token && Date.now() < tokenCache.expires) return tokenCache.token;
   return await generateToken();
 }
 
@@ -71,25 +67,27 @@ async function safeFetch(fn) {
     const token = await getToken();
     return await fn(token);
   } catch (err) {
-    console.log("⚠️ Retrying with new token:", err);
     const token = await getToken(true);
     return await fn(token);
   }
 }
 
 async function getAllChannels(token) {
+  if (channelsCache.data && Date.now() < channelsCache.expires) return channelsCache.data;
   const url = `https://${host}/stalker_portal/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml`;
   const res = await fetchInfo(url, buildHeaders(token));
   if (!res.data?.js?.data) throw new Error("Invalid channel data");
+  channelsCache = { data: res.data.js.data, expires: Date.now() + TOKEN_CACHE_TTL };
   return res.data.js.data;
 }
 
 async function getGenres(token) {
+  if (genresCache.data && Date.now() < genresCache.expires) return genresCache.data;
   const url = `https://${host}/stalker_portal/server/load.php?type=itv&action=get_genres&JsHttpRequest=1-xml`;
   const res = await fetchInfo(url, buildHeaders(token));
-  const arr = res.data?.js || [];
   const map = {};
-  for (const g of arr) if (g.id !== "*") map[g.id] = g.title;
+  for (const g of res.data?.js || []) if (g.id !== "*") map[g.id] = g.title;
+  genresCache = { data: map, expires: Date.now() + TOKEN_CACHE_TTL };
   return map;
 }
 
@@ -97,7 +95,6 @@ async function getStreamUrl(token, cmd) {
   const encoded = encodeURIComponent(cmd);
   const url = `https://${host}/stalker_portal/server/load.php?type=itv&action=create_link&cmd=${encoded}&JsHttpRequest=1-xml`;
   const res = await fetchInfo(url, buildHeaders(token));
-  console.log("CreateLink:", res.raw);
   return res.data?.js?.cmd || null;
 }
 
@@ -107,31 +104,25 @@ function getLogo(logo) {
   return `https://${host}/stalker_portal/misc/logos/320/${logo}`;
 }
 
-// 🚀 Main entry
 export async function onRequest(context) {
   const { request } = context;
   const urlObj = new URL(request.url);
   const id = urlObj.searchParams.get("id");
-  const baseUrl = `${urlObj.origin}/fusion4k.js`;
 
   try {
-    // 🔹 Direct stream mode
+    const baseUrl = `${urlObj.origin}/fusion4k.js`;
+
+    // Direct stream - instant
     if (id) {
       return await safeFetch(async (token) => {
-        const channels = await getAllChannels(token);
-        const ch = channels.find((c) => c.cmd?.includes(`/ch/${id}`));
-        if (!ch)
-          return new Response("Channel not found", { status: 404 });
-
-        const streamUrl = await getStreamUrl(token, ch.cmd);
-        if (!streamUrl)
-          return new Response("Failed to fetch stream link", { status: 500 });
-
+        const cmd = `/ch/${id}`; // generate cmd directly
+        const streamUrl = await getStreamUrl(token, cmd);
+        if (!streamUrl) return new Response("Failed to fetch stream link", { status: 500 });
         return Response.redirect(streamUrl, 302);
       });
     }
 
-    // 🔹 Full M3U playlist
+    // Full playlist
     const [channels, genres] = await safeFetch(async (token) => {
       const ch = await getAllChannels(token);
       const gr = await getGenres(token);
@@ -143,7 +134,7 @@ export async function onRequest(context) {
       const group = genres[ch.tv_genre_id] || "Others";
       const logo = getLogo(ch.logo);
       const id = ch.cmd.replace("ffrt http://localhost/ch/", "");
-      const playUrl = `${urlObj.origin}/fusion4k.js?id=${encodeURIComponent(id)}`;
+      const playUrl = `${baseUrl}?id=${encodeURIComponent(id)}`;
       playlist += `#EXTINF:-1 tvg-id="${id}" tvg-logo="${logo}" group-title="${group}",${ch.name}\n${playUrl}\n\n`;
     }
 
@@ -154,10 +145,10 @@ export async function onRequest(context) {
       },
     });
   } catch (err) {
-    console.error("❌ Server error:", err);
-    return new Response(
-      JSON.stringify({ error: String(err.message || err) }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    console.error("Server error:", err);
+    return new Response(JSON.stringify({ error: String(err) }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
