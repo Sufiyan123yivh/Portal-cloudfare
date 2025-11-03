@@ -86,7 +86,7 @@ export async function onRequest(context) {
   const id = urlObj.searchParams.get("id");
 
   try {
-    const baseUrl = `${urlObj.origin}/tatatv.m3u8`;
+    const baseUrl = `${urlObj.origin}/airtel4k.m3u8`;
 
     // Direct stream
     if (id) {
