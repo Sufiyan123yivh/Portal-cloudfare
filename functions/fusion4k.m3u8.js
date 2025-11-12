@@ -1,6 +1,6 @@
 // /functions/fusion4k.js
 const config = {
-  url: "http://tv.stream4k.cc/",
+  url: "https://tv.stream4k.cc/",
   mac: "00:1A:79:00:31:14",
   sn: "12A1BDB0FEA5D",
   device_id_1: "1F85A5927EC37F7416495E2BC8E7032988F91D59ADA5B939FA56E7E5D957328D",
