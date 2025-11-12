@@ -1,9 +1,9 @@
 // /functions/fusion4k.js
-// Cloudflare Pages Functions version
+// ✅ Cloudflare Pages Functions version (with debugging + HTTPS fallback)
 
 export const onRequestGet = async ({ request, env }) => {
   const config = {
-    url: "http://tv.stream4k.cc",
+    url: "https://tv.stream4k.cc", // ✅ Use HTTPS (Cloudflare blocks plain HTTP)
     mac: "00:1A:79:00:31:14",
     sn: "12A1BDB0FEA5D",
     device_id_1:
@@ -11,36 +11,44 @@ export const onRequestGet = async ({ request, env }) => {
     device_id_2:
       "1F85A5927EC37F7416495E2BC8E7032988F91D59ADA5B939FA56E7E5D957328D",
     sig: "",
-    api: "265",
+    api: "263",
   };
 
   const host = new URL(config.url).host;
+  let tokenCache = null;
 
-  // --- Helper to fetch JSON safely ---
+  // --- Safe fetch + debug logging ---
   async function fetchInfo(url, headers = {}) {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        ...headers,
-        Cookie: `mac=${config.mac}; stb_lang=en; timezone=GMT`,
-      },
-    });
-    const text = await res.text();
     try {
-      return { data: JSON.parse(text), raw: text };
-    } catch {
-      return { data: {}, raw: text };
+      const res = await fetch(url, {
+        method: "GET",
+        headers: {
+          ...headers,
+          Cookie: `mac=${config.mac}; stb_lang=en; timezone=GMT`,
+        },
+      });
+      const text = await res.text();
+      console.log(`🔍 [${res.status}] ${url}`);
+      if (res.status !== 200) console.log("⚠️ Response:", text.slice(0, 300));
+
+      try {
+        return { data: JSON.parse(text), raw: text };
+      } catch {
+        return { data: {}, raw: text };
+      }
+    } catch (e) {
+      console.error("❌ Fetch failed:", url, e);
+      throw new Error("Fetch failed: " + e.message);
     }
   }
 
-  // --- Handshake ---
   async function handshake() {
-    const url = `http://${host}/stalker_portal/server/load.php?type=stb&action=handshake&token=&JsHttpRequest=1-xml`;
+    const url = `${config.url}/stalker_portal/server/load.php?type=stb&action=handshake&token=&JsHttpRequest=1-xml`;
     const headers = {
       "User-Agent":
         "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
       "X-User-Agent": "Model: MAG250; Link: WiFi",
-      Referer: `http://${host}/stalker_portal/c/`,
+      Referer: `${config.url}/stalker_portal/c/`,
       Host: host,
     };
     const res = await fetchInfo(url, headers);
@@ -50,39 +58,35 @@ export const onRequestGet = async ({ request, env }) => {
     };
   }
 
-  // --- Re-handshake ---
   async function reGenerateToken(token) {
-    const url = `http://${host}/stalker_portal/server/load.php?type=stb&action=handshake&token=${token}&JsHttpRequest=1-xml`;
+    const url = `${config.url}/stalker_portal/server/load.php?type=stb&action=handshake&token=${token}&JsHttpRequest=1-xml`;
     const headers = {
       "User-Agent":
         "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
       "X-User-Agent": "Model: MAG250; Link: WiFi",
-      Referer: `http://${host}/stalker_portal/c/`,
+      Referer: `${config.url}/stalker_portal/c/`,
       Host: host,
     };
     const res = await fetchInfo(url, headers);
     return res.data?.js?.token || token;
   }
 
-  // --- Get profile ---
   async function getProfile(token) {
     const timestamp = Math.floor(Date.now() / 1000);
-    const url = `http://${host}/stalker_portal/server/load.php?type=stb&action=get_profile&sn=${config.sn}&device_id=${config.device_id_1}&device_id2=${config.device_id_2}&signature=${config.sig}&timestamp=${timestamp}&api_signature=${config.api}&JsHttpRequest=1-xml`;
+    const url = `${config.url}/stalker_portal/server/load.php?type=stb&action=get_profile&sn=${config.sn}&device_id=${config.device_id_1}&device_id2=${config.device_id_2}&signature=${config.sig}&timestamp=${timestamp}&api_signature=${config.api}&JsHttpRequest=1-xml`;
     const headers = {
       "User-Agent":
         "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
       "X-User-Agent": "Model: MAG250; Link: WiFi",
-      Referer: `http://${host}/stalker_portal/c/`,
+      Referer: `${config.url}/stalker_portal/c/`,
       Authorization: `Bearer ${token}`,
       Host: host,
     };
     await fetchInfo(url, headers);
   }
 
-  // --- Token handling using KV-like cache (Memory per request) ---
-  let tokenCache = null;
-
   async function generateToken() {
+    console.log("🔑 Generating new token...");
     const { token } = await handshake();
     const validToken = await reGenerateToken(token);
     await getProfile(validToken);
@@ -95,40 +99,37 @@ export const onRequestGet = async ({ request, env }) => {
     return generateToken();
   }
 
-  // --- Headers builder ---
   function buildHeaders(token) {
     return {
       "User-Agent":
         "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
       "X-User-Agent": "Model: MAG250; Link: WiFi",
-      Referer: `http://${host}/stalker_portal/c/`,
+      Referer: `${config.url}/stalker_portal/c/`,
       Authorization: `Bearer ${token}`,
       Host: host,
     };
   }
 
-  // --- Safe fetch wrapper ---
   async function safeFetch(fn) {
     try {
       const token = await getToken();
       return await fn(token);
-    } catch {
+    } catch (err) {
+      console.error("⚠️ Token failed, regenerating:", err);
       const token = await getToken(true);
       return await fn(token);
     }
   }
 
-  // --- Get channels ---
   async function getAllChannels(token) {
-    const url = `http://${host}/stalker_portal/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml`;
+    const url = `${config.url}/stalker_portal/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml`;
     const res = await fetchInfo(url, buildHeaders(token));
     if (!res.data?.js?.data) throw new Error("Invalid channel data");
     return res.data.js.data;
   }
 
-  // --- Get genres ---
   async function getGenres(token) {
-    const url = `http://${host}/stalker_portal/server/load.php?type=itv&action=get_genres&JsHttpRequest=1-xml`;
+    const url = `${config.url}/stalker_portal/server/load.php?type=itv&action=get_genres&JsHttpRequest=1-xml`;
     const res = await fetchInfo(url, buildHeaders(token));
     const arr = res.data?.js || [];
     const map = {};
@@ -138,11 +139,10 @@ export const onRequestGet = async ({ request, env }) => {
     return map;
   }
 
-  // --- Get stream URL ---
   async function getStreamUrl(token, cmd) {
     if (!cmd) return null;
     const encodedCmd = encodeURIComponent(cmd);
-    const url = `http://${host}/stalker_portal/server/load.php?type=itv&action=create_link&cmd=${encodedCmd}&JsHttpRequest=1-xml`;
+    const url = `${config.url}/stalker_portal/server/load.php?type=itv&action=create_link&cmd=${encodedCmd}&JsHttpRequest=1-xml`;
     const res = await fetchInfo(url, buildHeaders(token));
     return res.data?.js?.cmd || null;
   }
@@ -151,14 +151,14 @@ export const onRequestGet = async ({ request, env }) => {
     if (!logo || (!logo.endsWith(".png") && !logo.endsWith(".jpg"))) {
       return "https://i.ibb.co/gLsp7Vrz/x.jpg";
     }
-    return `http://${host}/stalker_portal/misc/logos/320/${logo}`;
+    return `${config.url}/stalker_portal/misc/logos/320/${logo}`;
   }
 
   try {
     const urlObj = new URL(request.url);
     const id = urlObj.searchParams.get("id");
 
-    // Direct stream mode
+    // 🎬 Direct stream mode
     if (id) {
       const streamUrl = await safeFetch(async (token) => {
         const channels = await getAllChannels(token);
@@ -173,7 +173,7 @@ export const onRequestGet = async ({ request, env }) => {
       return Response.redirect(streamUrl, 302);
     }
 
-    // Playlist mode
+    // 📺 Playlist mode
     const [channels, genres] = await safeFetch(async (token) => {
       const ch = await getAllChannels(token);
       const gr = await getGenres(token);
@@ -181,8 +181,8 @@ export const onRequestGet = async ({ request, env }) => {
     });
 
     const baseUrl = `${urlObj.origin}/functions/fusion4k`;
-
     let playlist = `#EXTM3U\n#DATE:- ${new Date().toLocaleString("en-IN")}\n\n`;
+
     for (const ch of channels) {
       const group = genres[ch.tv_genre_id] || "Others";
       const logo = getLogo(ch.logo);
@@ -193,12 +193,16 @@ export const onRequestGet = async ({ request, env }) => {
 
     return new Response(playlist, {
       headers: {
-        "Content-Type": "audio/x-mpegurl",
+        "Content-Type": "audio/x-mpegurl; charset=utf-8",
+        "Access-Control-Allow-Origin": "*",
         "Content-Disposition": 'inline; filename="fusion4k.m3u"',
       },
     });
   } catch (err) {
-    console.error(err);
-    return new Response("Server Error", { status: 500 });
+    console.error("❌ Server error:", err);
+    return new Response(`Server Error: ${err.message}`, {
+      status: 500,
+      headers: { "Access-Control-Allow-Origin": "*" },
+    });
   }
 };
