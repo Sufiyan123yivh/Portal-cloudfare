@@ -3,7 +3,7 @@
 
 export const onRequestGet = async ({ request, env }) => {
   const config = {
-    url: "https://tv.stream4k.cc", // try HTTPS first
+    url: "http://tv.stream4k.cc", // try HTTPS first
     mac: "00:1A:79:00:31:14",
     sn: "12A1BDB0FEA5D",
     device_id_1:
