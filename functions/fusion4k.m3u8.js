@@ -11,7 +11,7 @@ export const onRequestGet = async ({ request, env }) => {
     device_id_2:
       "1F85A5927EC37F7416495E2BC8E7032988F91D59ADA5B939FA56E7E5D957328D",
     sig: "",
-    api: "263",
+    api: "265",
   };
 
   const host = new URL(config.url).host;
