@@ -19,28 +19,43 @@ export const onRequestGet = async ({ request, env }) => {
 
   // --- Safe fetch + debug logging ---
   async function fetchInfo(url, headers = {}) {
-    try {
-      const res = await fetch(url, {
+  async function fetchInfo(url, headers = {}) {
+  try {
+    let res = await fetch(url, {
+      method: "GET",
+      headers: {
+        ...headers,
+        Cookie: `mac=${config.mac}; stb_lang=en; timezone=GMT`,
+      },
+    });
+
+    // If HTTPS fails or times out, retry with HTTP
+    if (!res.ok && url.startsWith("https://")) {
+      const httpUrl = url.replace("https://", "http://");
+      console.log("🌐 HTTPS failed, retrying via HTTP:", httpUrl);
+      res = await fetch(httpUrl, {
         method: "GET",
         headers: {
           ...headers,
           Cookie: `mac=${config.mac}; stb_lang=en; timezone=GMT`,
         },
       });
-      const text = await res.text();
-      console.log(`🔍 [${res.status}] ${url}`);
-      if (res.status !== 200) console.log("⚠️ Response:", text.slice(0, 300));
-
-      try {
-        return { data: JSON.parse(text), raw: text };
-      } catch {
-        return { data: {}, raw: text };
-      }
-    } catch (e) {
-      console.error("❌ Fetch failed:", url, e);
-      throw new Error("Fetch failed: " + e.message);
     }
+
+    const text = await res.text();
+    console.log(`🔍 [${res.status}] ${url}`);
+    if (res.status !== 200) console.log("⚠️ Response:", text.slice(0, 300));
+
+    try {
+      return { data: JSON.parse(text), raw: text };
+    } catch {
+      return { data: {}, raw: text };
+    }
+  } catch (e) {
+    console.error("❌ Fetch failed:", url, e);
+    throw new Error("Fetch failed: " + e.message);
   }
+}
 
   async function handshake() {
     const url = `${config.url}/stalker_portal/server/load.php?type=stb&action=handshake&token=&JsHttpRequest=1-xml`;
