@@ -1,7 +1,7 @@
 
 // /functions/fusion4k.js
 const config = {
-  url: "http://tv.stream4k.cc/",
+  url: "http://tv.stream4k.cc/stalker_portal/c/",
   mac: "00:1A:79:00:31:14",
   sn: "12A1BDB0FEA5D",
   device_id_1:
