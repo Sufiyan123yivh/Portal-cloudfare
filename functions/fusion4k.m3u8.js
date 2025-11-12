@@ -1,4 +1,3 @@
-
 // /functions/fusion4k.js
 const config = {
   url: "http://tv.stream4k.cc/stalker_portal/c/",
@@ -124,4 +123,4 @@ export async function onRequest(context) {
       headers: { "Content-Type": "application/json" },
     });
   }
-    }
+}
