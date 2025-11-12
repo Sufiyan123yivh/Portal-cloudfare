@@ -122,11 +122,17 @@ export const onRequestGet = async ({ request, env }) => {
   }
 
   async function getAllChannels(token) {
-    const url = `${config.url}/stalker_portal/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml`;
-    const res = await fetchInfo(url, buildHeaders(token));
-    if (!res.data?.js?.data) throw new Error("Invalid channel data");
-    return res.data.js.data;
+  const url = `${config.url}/stalker_portal/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml`;
+  const res = await fetchInfo(url, buildHeaders(token));
+
+  if (!res.data?.js?.data) {
+    console.error("⚠️ Invalid channel data from portal:");
+    console.error(res.raw.slice(0, 300)); // log first 300 chars of the actual response
+    throw new Error("Invalid channel data");
   }
+
+  return res.data.js.data;
+}
 
   async function getGenres(token) {
     const url = `${config.url}/stalker_portal/server/load.php?type=itv&action=get_genres&JsHttpRequest=1-xml`;
